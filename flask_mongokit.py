@@ -9,7 +9,6 @@
     :copyright: 2011 by Christoph Heer <Christoph.Heer@googlemail.com
     :license: BSD, see LICENSE for more details.
 """
-
 from __future__ import absolute_import
 
 import bson
@@ -116,19 +115,24 @@ class MongoKit(object):
         app.config.setdefault('MONGODB_HOST', '127.0.0.1')
         app.config.setdefault('MONGODB_PORT', 27017)
         app.config.setdefault('MONGODB_DATABASE', 'flask')
-        app.config.setdefault('MONGODB_SLAVE_OKAY', False)
         app.config.setdefault('MONGODB_USERNAME', None)
         app.config.setdefault('MONGODB_PASSWORD', None)
+        app.config.setdefault('MONGODB_URL', 'mongodb://127.0.0.1:27071/')
+        app.config.setdefault('MONGODB_CONNECTION_OPTIONS', {
+            'auto_start_request': False
+        })
+
+        app.before_first_request(self._before_first_request)
 
         # 0.9 and later
         # no coverage check because there is everytime only one
-        if hasattr(app, 'teardown_appcontext'): # pragma: no cover
+        if hasattr(app, 'teardown_appcontext'):  # pragma: no cover
             app.teardown_appcontext(self._teardown_request)
         # 0.7 to 0.8
-        elif hasattr(app, 'teardown_request'): # pragma: no cover
+        elif hasattr(app, 'teardown_request'):  # pragma: no cover
             app.teardown_request(self._teardown_request)
         # Older Flask versions
-        else: # pragma: no cover
+        else:  # pragma: no cover
             app.after_request(self._teardown_request)
 
         # register extension with app only to say "I'm here"
@@ -138,6 +142,19 @@ class MongoKit(object):
         app.url_map.converters['ObjectId'] = BSONObjectIdConverter
 
         self.app = app
+
+        self.mongokit_connection = Connection(
+            host=app.config.get('MONGODB_HOST'),
+            port=app.config.get('MONGODB_PORT'),
+            **app.config.get('MONGODB_CONNECTION_OPTIONS', {})
+        )
+        if app.config.get('MONGODB_USERNAME') is not None:
+            auth_success = self.mongokit_connection.authenticate(
+                app.config.get('MONGODB_USERNAME'),
+                app.config.get('MONGODB_PASSWORD')
+            )
+            if not auth_success:
+                raise AuthenticationIncorrect('Server authentication failed')
 
     def register(self, documents):
         """Register one or more :class:`mongokit.Document` instances to the
@@ -159,61 +176,7 @@ class MongoKit(object):
 
         :param documents: A :class:`list` of :class:`mongokit.Document`.
         """
-
-        #enable decorator usage as in mongokit.Connection
-        decorator = None
-        if not isinstance(documents, (list, tuple, set, frozenset)):
-            # we assume that the user used this as a decorator
-            # using @register syntax or using db.register(SomeDoc)
-            # we stock the class object in order to return it later
-            decorator = documents
-            documents = [documents]
-
-        for document in documents:
-            if document not in self.registered_documents:
-                self.registered_documents.append(document)
-
-        if decorator is None:
-            return self.registered_documents
-        else:
-            return decorator
-
-    def connect(self):
-        """Connect to the MongoDB server and register the documents from
-        :attr:`registered_documents`. If you set ``MONGODB_USERNAME`` and
-        ``MONGODB_PASSWORD`` then you will be authenticated at the
-        ``MONGODB_DATABASE``.
-        """
-        if self.app is None:
-            raise RuntimeError('The flask-mongokit extension was not init to '
-                               'the current application.  Please make sure '
-                               'to call init_app() first.')
-
-        ctx = ctx_stack.top
-        mongokit_connection = getattr(ctx, 'mongokit_connection', None)
-        if mongokit_connection is None:
-            ctx.mongokit_connection = Connection(
-                host=ctx.app.config.get('MONGODB_HOST'),
-                port=ctx.app.config.get('MONGODB_PORT'),
-                slave_okay=ctx.app.config.get('MONGODB_SLAVE_OKAY')
-            )
-        
-            ctx.mongokit_connection.register(self.registered_documents)
-        
-        mongokit_database = getattr(ctx, 'mongokit_database', None)
-        if mongokit_database is None:
-            ctx.mongokit_database = Database(
-                ctx.mongokit_connection,
-                ctx.app.config.get('MONGODB_DATABASE')
-            )
-            
-        if ctx.app.config.get('MONGODB_USERNAME') is not None:
-            auth_success = ctx.mongokit_database.authenticate(
-                ctx.app.config.get('MONGODB_USERNAME'),
-                ctx.app.config.get('MONGODB_PASSWORD')
-            )
-            if not auth_success:
-                raise AuthenticationIncorrect('Server authentication failed')
+        self.mongokit_connection.register(documents)
 
     @property
     def connected(self):
@@ -229,20 +192,19 @@ class MongoKit(object):
             del ctx.mongokit_connection
             del ctx.mongokit_database
 
+    def _before_first_request(self):
+        self.mongokit_connection.start_request()
+
     def _teardown_request(self, response):
-        self.disconnect()
+        self.mongokit_connection.end_request()
         return response
 
     def __getattr__(self, name, **kwargs):
-        if not self.connected:
-            self.connect()
-        
-        mongokit_database = getattr(ctx_stack.top, "mongokit_database")
-        return getattr(mongokit_database, name)
-    
+        return getattr(self._get_mongo_database(), name)
+
     def __getitem__(self, name):
-        if not self.connected:
-            self.connect()
-        
-        mongokit_database = getattr(ctx_stack.top, "mongokit_database")
-        return mongokit_database[name]
+        return self._get_mongo_database()[name]
+
+    def _get_mongo_database(self):
+        ctx = ctx_stack.top
+        return Database(self.mongokit_connection, ctx.app.config.get('MONGODB_DATABASE'))
