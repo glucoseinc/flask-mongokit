@@ -156,41 +156,14 @@ class MongoKit(object):
             if not auth_success:
                 raise AuthenticationIncorrect('Server authentication failed')
 
-    def register(self, documents):
-        """Register one or more :class:`mongokit.Document` instances to the
-        connection.
-
-        Can be also used as a decorator on documents:
-
-        .. code-block:: python
-
-            db = MongoKit(app)
-
-            @db.register
-            class Task(Document):
-                structure = {
-                   'title': unicode,
-                   'text': unicode,
-                   'creation': datetime,
-                }
-
-        :param documents: A :class:`list` of :class:`mongokit.Document`.
-        """
-        self.mongokit_connection.register(documents)
+        # database
+        self.mongokit_database = Database(self.mongokit_connection, app.config.get('MONGODB_DATABASE'))
 
     @property
     def connected(self):
         """Connection status to your MongoDB."""
         ctx = ctx_stack.top
         return getattr(ctx, 'mongokit_connection', None) is not None
-
-    def disconnect(self):
-        """Close the connection to your MongoDB."""
-        if self.connected:
-            ctx = ctx_stack.top
-            ctx.mongokit_connection.disconnect()
-            del ctx.mongokit_connection
-            del ctx.mongokit_database
 
     def _before_first_request(self):
         self.mongokit_connection.start_request()
@@ -206,5 +179,4 @@ class MongoKit(object):
         return self._get_mongo_database()[name]
 
     def _get_mongo_database(self):
-        ctx = ctx_stack.top
-        return Database(self.mongokit_connection, ctx.app.config.get('MONGODB_DATABASE'))
+        return self.mongokit_database
