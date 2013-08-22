@@ -148,16 +148,14 @@ class MongoKit(object):
             port=app.config.get('MONGODB_PORT'),
             **app.config.get('MONGODB_CONNECTION_OPTIONS', {})
         )
+        self.mongokit_database = Database(self.mongokit_connection, app.config.get('MONGODB_DATABASE'))
         if app.config.get('MONGODB_USERNAME') is not None:
-            auth_success = self.mongokit_connection.authenticate(
+            auth_success = self.mongokit_database.authenticate(
                 app.config.get('MONGODB_USERNAME'),
                 app.config.get('MONGODB_PASSWORD')
             )
             if not auth_success:
                 raise AuthenticationIncorrect('Server authentication failed')
-
-        # database
-        self.mongokit_database = Database(self.mongokit_connection, app.config.get('MONGODB_DATABASE'))
 
     @property
     def connected(self):
